@@ -1,0 +1,42 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: bulk-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Same pattern as https://github.com/engyahmed7/s3-worm-store
+  # Host ports 9002/9003 avoid ClickHouse (or other tools) already using 9000.
+  minio:
+    image: quay.io/minio/minio
+    container_name: bulk-minio
+    command: server /data{1...4} --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+    volumes:
+      - minio-data1:/data1
+      - minio-data2:/data2
+      - minio-data3:/data3
+      - minio-data4:/data4
+
+volumes:
+  rabbitmq_data:
+  minio-data1:
+  minio-data2:
+  minio-data3:
+  minio-data4:
