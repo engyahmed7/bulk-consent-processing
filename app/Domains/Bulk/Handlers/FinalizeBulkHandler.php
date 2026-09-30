@@ -6,6 +6,7 @@ use App\Domains\Bulk\Enums\BulkJobStatus;
 use App\Domains\Bulk\Models\BulkJob;
 use App\Domains\Bulk\Services\Csv\BulkResultWriter;
 use App\Domains\Bulk\Services\Storage\WormStorage;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class FinalizeBulkHandler
@@ -45,6 +46,16 @@ class FinalizeBulkHandler
             $job->update([
                 'worm_result_path' => $objectKey,
                 'status' => $status,
+            ]);
+
+            Log::info('Bulk CSV job finalized', [
+                'bulk_job_id' => $job->id,
+                'bulk_job_uuid' => $job->uuid,
+                'status' => $status->value,
+                'total_rows' => $job->total_rows,
+                'success_rows' => $job->success_rows,
+                'failed_rows' => $job->failed_rows,
+                'result_path' => $objectKey,
             ]);
         } catch (Throwable $exception) {
             $job->update([

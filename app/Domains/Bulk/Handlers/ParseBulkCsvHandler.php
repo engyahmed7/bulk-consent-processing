@@ -14,6 +14,7 @@ use App\Domains\Bulk\Services\Csv\BulkCsvStreamer;
 use App\Domains\Bulk\Services\Storage\WormStorage;
 use App\Infrastructure\RabbitMq\RabbitMqPublisher;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -39,6 +40,11 @@ class ParseBulkCsvHandler
         }
 
         $job->update(['status' => BulkJobStatus::Parsing]);
+
+        Log::info('Bulk CSV parsing started', [
+            'bulk_job_id' => $job->id,
+            'bulk_job_uuid' => $job->uuid,
+        ]);
 
         $chunkSize = (int) config('bulk.chunk_size', 1000);
         $disk = (string) config('bulk.input_disk', 'minio');
@@ -74,8 +80,20 @@ class ParseBulkCsvHandler
             ]);
 
             if ($rowCount === 0) {
+                Log::warning('Bulk CSV contained no data rows', [
+                    'bulk_job_id' => $job->id,
+                    'bulk_job_uuid' => $job->uuid,
+                ]);
+
                 return;
             }
+
+            Log::info('Bulk CSV parsing completed', [
+                'bulk_job_id' => $job->id,
+                'bulk_job_uuid' => $job->uuid,
+                'total_rows' => $rowCount,
+                'chunks_total' => $chunkIndex,
+            ]);
 
             $job->chunks()->orderBy('chunk_index')->each(function (BulkJobChunk $chunk) use ($job): void {
                 $this->publisher->publish(BrokerQueuePurpose::BulkValidate, [

@@ -9,6 +9,7 @@ use App\Domains\Bulk\Models\BulkJob;
 use App\Infrastructure\RabbitMq\RabbitMqPublisher;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class BulkUploadService
@@ -42,6 +43,12 @@ class BulkUploadService
             $this->publisher->publish(BrokerQueuePurpose::BulkParse, [
                 'type' => 'parse_bulk',
                 'bulk_job_id' => $job->id,
+            ]);
+
+            Log::info('Bulk CSV upload queued for parsing', [
+                'bulk_job_id' => $job->id,
+                'bulk_job_uuid' => $job->uuid,
+                'action' => $job->action->value,
             ]);
         });
 

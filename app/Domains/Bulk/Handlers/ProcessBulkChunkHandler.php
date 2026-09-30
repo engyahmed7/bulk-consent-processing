@@ -12,6 +12,7 @@ use App\Domains\Bulk\Services\Consent\ConsentClientInterface;
 use App\Domains\Bulk\Services\Validation\RowValidator;
 use App\Infrastructure\RabbitMq\RabbitMqPublisher;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class ProcessBulkChunkHandler
@@ -116,6 +117,16 @@ class ProcessBulkChunkHandler
                     'chunks_done' => DB::raw('chunks_done + 1'),
                 ]);
             });
+
+            Log::info('Bulk CSV validation chunk completed', [
+                'bulk_job_id' => $job->id,
+                'bulk_job_uuid' => $job->uuid,
+                'chunk_id' => $chunk->id,
+                'chunk_index' => $chunk->chunk_index,
+                'rows_processed' => $success + $failed,
+                'success_rows' => $success,
+                'failed_rows' => $failed,
+            ]);
         } catch (Throwable $exception) {
             BulkJobChunk::query()
                 ->whereKey($chunk->id)

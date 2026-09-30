@@ -58,6 +58,7 @@ class RabbitMqConsumer
     private function handleMessage(AMQPMessage $message, Closure $handler, BrokerQueuePurpose $purpose): void
     {
         $attempt = $this->retryCount($message);
+        $payload = [];
 
         try {
             /** @var array<string, mixed> $payload */
@@ -68,6 +69,8 @@ class RabbitMqConsumer
             Log::error('RabbitMQ message handling failed', [
                 'purpose' => $purpose->value,
                 'attempt' => $attempt,
+                'bulk_job_id' => $payload['bulk_job_id'] ?? null,
+                'chunk_id' => $payload['chunk_id'] ?? null,
                 'error' => $exception->getMessage(),
             ]);
 

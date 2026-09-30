@@ -1,5 +1,6 @@
 <?php
 
+use App\Logging\JsonTap;
 use Monolog\Handler\NullHandler;
 use Monolog\Handler\StreamHandler;
 use Monolog\Handler\SyslogUdpHandler;
@@ -54,7 +55,10 @@ return [
 
         'stack' => [
             'driver' => 'stack',
-            'channels' => explode(',', (string) env('LOG_STACK', 'single')),
+            'channels' => array_values(array_unique([
+                ...array_filter(array_map('trim', explode(',', (string) env('LOG_STACK', 'single')))),
+                'opensearch-json',
+            ])),
             'ignore_exceptions' => false,
         ],
 
@@ -133,6 +137,17 @@ return [
 
         'emergency' => [
             'path' => storage_path('logs/laravel.log'),
+        ],
+
+        'opensearch-json' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/json/laravel.log'),
+            'level' => env('LOG_LEVEL', 'info'),
+            'max_files' => env('LOG_DAILY_DAYS', 14),
+            'replace_placeholders' => true,
+            'tap' => [
+                JsonTap::class,
+            ],
         ],
 
     ],
