@@ -8,7 +8,7 @@ return [
 
     'max_upload_kb' => (int) env('BULK_MAX_UPLOAD_KB', 51200),
 
-    'input_disk' => env('BULK_INPUT_DISK', 'bulk'),
+    'input_disk' => 'minio',
 
     'worm_disk' => env('BULK_WORM_DISK', 'minio'),
 

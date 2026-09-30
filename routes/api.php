@@ -12,7 +12,6 @@ Route::middleware(EnsureApiKey::class)->group(function (): void {
     Route::put('broker-queues/{brokerQueue}', [BrokerQueueController::class, 'update']);
     Route::delete('broker-queues/{brokerQueue}', [BrokerQueueController::class, 'destroy']);
 
-    Route::post('bulk-jobs', [BulkJobController::class, 'store']);
     Route::get('bulk-jobs/{bulkJob}', [BulkJobController::class, 'show']);
     Route::get('bulk-jobs/{bulkJob}/result', [BulkJobController::class, 'result']);
 });

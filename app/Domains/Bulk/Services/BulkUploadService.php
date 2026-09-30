@@ -8,7 +8,7 @@ use App\Domains\Bulk\Enums\ConsentAction;
 use App\Domains\Bulk\Models\BulkJob;
 use App\Infrastructure\RabbitMq\RabbitMqPublisher;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class BulkUploadService
@@ -20,29 +20,43 @@ class BulkUploadService
     public function upload(UploadedFile $file, ConsentAction $action, ?string $createdBy = null): BulkJob
     {
         $uuid = (string) Str::uuid();
-        $disk = (string) config('bulk.input_disk', 'bulk');
-        $path = "inputs/{$uuid}/".$file->getClientOriginalName();
+        $disk = (string) config('bulk.input_disk', 'minio');
+        $filename = $this->safeCsvFilename($file);
+        $directory = "inputs/{$uuid}";
+        $storedPath = $file->storeAs($directory, $filename, ['disk' => $disk]);
 
-        Storage::disk($disk)->putFileAs(
-            "inputs/{$uuid}",
-            $file,
-            $file->getClientOriginalName(),
-        );
+        if (! is_string($storedPath) || $storedPath === '') {
+            throw new \RuntimeException('Unable to store the uploaded CSV file.');
+        }
 
         $job = BulkJob::query()->create([
             'uuid' => $uuid,
             'action' => $action,
             'status' => BulkJobStatus::Queued,
             'original_filename' => $file->getClientOriginalName(),
-            'input_path' => $path,
+            'input_path' => $storedPath,
             'created_by' => $createdBy,
         ]);
 
-        $this->publisher->publish(BrokerQueuePurpose::BulkParse, [
-            'type' => 'parse_bulk',
-            'bulk_job_id' => $job->id,
-        ]);
+        DB::afterCommit(function () use ($job): void {
+            $this->publisher->publish(BrokerQueuePurpose::BulkParse, [
+                'type' => 'parse_bulk',
+                'bulk_job_id' => $job->id,
+            ]);
+        });
 
         return $job;
+    }
+
+    private function safeCsvFilename(UploadedFile $file): string
+    {
+        $basename = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME);
+        $slug = Str::slug($basename);
+
+        if ($slug === '') {
+            $slug = 'upload';
+        }
+
+        return $slug.'.csv';
     }
 }

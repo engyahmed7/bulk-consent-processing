@@ -4,7 +4,7 @@ namespace App\Domains\Bulk\Handlers;
 
 use App\Domains\Bulk\Enums\BulkJobStatus;
 use App\Domains\Bulk\Models\BulkJob;
-use App\Domains\Bulk\Services\Excel\BulkResultWriter;
+use App\Domains\Bulk\Services\Csv\BulkResultWriter;
 use App\Domains\Bulk\Services\Storage\WormStorage;
 use Throwable;
 
@@ -33,7 +33,7 @@ class FinalizeBulkHandler
 
         try {
             $tempPath = $this->resultWriter->writeToTempFile($job);
-            $objectKey = sprintf('bulk-results/%s/result-%s.xlsx', $job->uuid, now()->format('YmdHis'));
+            $objectKey = sprintf('bulk-results/%s/result-%s.csv', $job->uuid, now()->format('YmdHis'));
             $this->wormStorage->putFileOnce($objectKey, $tempPath);
 
             $status = match (true) {

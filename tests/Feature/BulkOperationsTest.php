@@ -9,11 +9,12 @@ use App\Domains\Bulk\Enums\BulkJobStatus;
 use App\Domains\Bulk\Enums\BulkRowStatus;
 use App\Domains\Bulk\Enums\ConsentAction;
 use App\Domains\Bulk\Handlers\FinalizeBulkHandler;
-use App\Domains\Bulk\Handlers\ParseBulkExcelHandler;
+use App\Domains\Bulk\Handlers\ParseBulkCsvHandler;
 use App\Domains\Bulk\Handlers\ProcessBulkChunkHandler;
 use App\Domains\Bulk\Models\BulkJob;
 use App\Domains\Bulk\Models\BulkJobChunk;
 use App\Domains\Bulk\Models\BulkJobRow;
+use App\Domains\Bulk\Services\BulkUploadService;
 use App\Domains\Bulk\Services\Consent\ConsentClientInterface;
 use App\Domains\Bulk\Services\Consent\ConsentResult;
 use App\Domains\Bulk\Services\Storage\WormArchive;
@@ -24,9 +25,6 @@ use Closure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use OpenSpout\Common\Entity\Row;
-use OpenSpout\Reader\XLSX\Reader;
-use OpenSpout\Writer\XLSX\Writer;
 use Tests\TestCase;
 
 class BulkOperationsTest extends TestCase
@@ -37,7 +35,8 @@ class BulkOperationsTest extends TestCase
     {
         parent::setUp();
 
-        Storage::disk('bulk')->makeDirectory('inputs');
+        Storage::fake('minio');
+        Storage::disk('minio')->makeDirectory('inputs');
 
         $this->mock(RabbitMqPublisher::class, function ($mock): void {
             $mock->shouldReceive('publish')->andReturnNull();
@@ -78,32 +77,30 @@ class BulkOperationsTest extends TestCase
             ->assertExitCode(0);
     }
 
-    public function test_upload_rejects_unauthorized_requests(): void
+    public function test_bulk_job_upload_is_not_available_on_the_api(): void
     {
-        $this->postJson('/api/bulk-jobs', [])
-            ->assertUnauthorized();
-    }
-
-    public function test_upload_accepts_xlsx_and_creates_job(): void
-    {
-        $file = $this->makeExcelUpload([
-            ['u1', '966500000001'],
-            ['u2', 'bad-phone'],
-        ]);
-
-        $response = $this->withHeader('X-API-Key', 'test-api-key')
+        $this->withHeader('X-API-Key', 'test-api-key')
             ->post('/api/bulk-jobs', [
                 'action' => ConsentAction::OptIn->value,
-                'file' => $file,
-            ]);
+            ])
+            ->assertNotFound();
+    }
 
-        $response->assertAccepted()
-            ->assertJsonStructure(['job_id', 'status']);
+    public function test_upload_service_stores_csv_on_minio_and_returns_the_process_id(): void
+    {
+        $job = app(BulkUploadService::class)->upload(
+            $this->makeCsvUpload([['u1', '966500000001']]),
+            ConsentAction::OptIn,
+            'ops@example.test',
+        );
 
-        $this->assertDatabaseHas('bulk_jobs', [
-            'status' => BulkJobStatus::Queued->value,
-            'action' => ConsentAction::OptIn->value,
-        ]);
+        $this->assertSame(BulkJobStatus::Queued, $job->status);
+        $this->assertNotSame('', $job->uuid);
+        $this->assertSame('ops@example.test', $job->created_by);
+        $this->assertTrue(Storage::disk('minio')->exists($job->input_path));
+        $this->assertStringStartsWith('inputs/'.$job->uuid.'/', $job->input_path);
+        $this->assertStringEndsWith('.csv', $job->input_path);
+        $this->assertStringNotContainsString(storage_path('app'), $job->input_path);
     }
 
     public function test_parse_handler_creates_chunks_and_rows(): void
@@ -118,13 +115,13 @@ class BulkOperationsTest extends TestCase
                     $this->assertFileExists($tempPath);
                     $this->assertGreaterThan(0, filesize($tempPath));
                     $archivedPaths[] = $path;
-                    $archivedRows[] = $this->readExcelRows($tempPath);
+                    $archivedRows[] = $this->readCsvRows($tempPath);
 
                     return $path;
                 });
         });
 
-        $path = $this->storeExcelFixture([
+        $path = $this->storeCsvFixture([
             ['u1', '966500000001', 'u1@example.test', 'gold'],
             ['u2', '966500000002', 'u2@example.test', 'silver'],
             ['u3', '966500000003', 'u3@example.test', 'bronze'],
@@ -133,11 +130,11 @@ class BulkOperationsTest extends TestCase
         $job = BulkJob::query()->create([
             'action' => ConsentAction::OptIn,
             'status' => BulkJobStatus::Queued,
-            'original_filename' => 'fixture.xlsx',
+            'original_filename' => 'fixture.csv',
             'input_path' => $path,
         ]);
 
-        app(ParseBulkExcelHandler::class)->handle([
+        app(ParseBulkCsvHandler::class)->handle([
             'bulk_job_id' => $job->id,
         ]);
 
@@ -149,6 +146,7 @@ class BulkOperationsTest extends TestCase
         $this->assertSame(3, BulkJobRow::query()->count());
         $this->assertSame($archivedPaths, BulkJobChunk::query()->orderBy('chunk_index')->pluck('worm_path')->all());
         $this->assertSame(['email' => 'u1@example.test', 'payment plan' => 'gold'], BulkJobRow::query()->where('row_number', 2)->firstOrFail()->additional_data);
+        $this->assertStringEndsWith('.csv', $archivedPaths[0]);
         $this->assertSame(['source_row', 'userid', 'phonenumber', 'email', 'payment plan'], $archivedRows[0][0]);
         $this->assertSame(['2', 'u1', '966500000001', 'u1@example.test', 'gold'], $archivedRows[0][1]);
     }
@@ -161,8 +159,8 @@ class BulkOperationsTest extends TestCase
         $job = BulkJob::query()->create([
             'action' => ConsentAction::OptIn,
             'status' => BulkJobStatus::Processing,
-            'original_filename' => 'fixture.xlsx',
-            'input_path' => 'inputs/x.xlsx',
+            'original_filename' => 'fixture.csv',
+            'input_path' => 'inputs/x.csv',
             'total_rows' => 1,
             'chunks_total' => 1,
         ]);
@@ -204,8 +202,8 @@ class BulkOperationsTest extends TestCase
         $job = BulkJob::query()->create([
             'action' => ConsentAction::OptOut,
             'status' => BulkJobStatus::Processing,
-            'original_filename' => 'fixture.xlsx',
-            'input_path' => 'inputs/x.xlsx',
+            'original_filename' => 'fixture.csv',
+            'input_path' => 'inputs/x.csv',
             'total_rows' => 1,
             'chunks_total' => 1,
         ]);
@@ -246,8 +244,8 @@ class BulkOperationsTest extends TestCase
         $job = BulkJob::query()->create([
             'action' => ConsentAction::OptIn,
             'status' => BulkJobStatus::Processing,
-            'original_filename' => 'fixture.xlsx',
-            'input_path' => 'inputs/x.xlsx',
+            'original_filename' => 'fixture.csv',
+            'input_path' => 'inputs/x.csv',
             'total_rows' => 1,
             'chunks_total' => 1,
         ]);
@@ -285,7 +283,7 @@ class BulkOperationsTest extends TestCase
             $mock->shouldReceive('writeFileOnce')
                 ->once()
                 ->andReturnUsing(function (string $key, string $tempPath) use (&$written): string {
-                    $resultRows = $this->readExcelRows($tempPath);
+                    $resultRows = $this->readCsvRows($tempPath);
                     $this->assertSame(['userid', 'phonenumber', 'status', 'error_code', 'error_message', 'email', 'payment plan'], $resultRows[0]);
                     $this->assertSame(['u1', '966500000001', 'success', '', '', 'u1@example.test', 'gold'], $resultRows[1]);
 
@@ -310,8 +308,8 @@ class BulkOperationsTest extends TestCase
         $job = BulkJob::query()->create([
             'action' => ConsentAction::OptIn,
             'status' => BulkJobStatus::Processing,
-            'original_filename' => 'fixture.xlsx',
-            'input_path' => 'inputs/x.xlsx',
+            'original_filename' => 'fixture.csv',
+            'input_path' => 'inputs/x.csv',
             'total_rows' => 2,
             'processed_rows' => 2,
             'success_rows' => 1,
@@ -354,62 +352,63 @@ class BulkOperationsTest extends TestCase
     /**
      * @param  list<array{0: string, 1: string}>  $rows
      */
-    private function makeExcelUpload(array $rows): UploadedFile
+    private function makeCsvUpload(array $rows): UploadedFile
     {
-        $path = $this->writeExcel($rows);
+        $path = tempnam(sys_get_temp_dir(), 'bulk_csv_').'.csv';
+        $handle = fopen($path, 'w');
+        fputcsv($handle, ['userid', 'phonenumber']);
+        foreach ($rows as $row) {
+            fputcsv($handle, $row);
+        }
+        fclose($handle);
 
-        return new UploadedFile($path, 'users.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', null, true);
+        return new UploadedFile($path, 'users.csv', 'text/csv', null, true);
     }
 
     /**
-     * @param  list<array{0: string, 1: string}>  $rows
+     * @param  list<list<string>>  $rows
+     * @param  list<string>  $headers
      */
-    private function storeExcelFixture(array $rows, array $headers = ['userid', 'phonenumber']): string
+    private function storeCsvFixture(array $rows, array $headers = ['userid', 'phonenumber']): string
     {
-        $absolute = $this->writeExcel($rows, $headers);
-        $relative = 'inputs/fixture-'.uniqid('', true).'.xlsx';
-        Storage::disk('bulk')->put($relative, file_get_contents($absolute));
-        @unlink($absolute);
+        $relative = 'inputs/fixture-'.uniqid('', true).'.csv';
+        Storage::disk('minio')->put($relative, $this->csvContents($rows, $headers));
 
         return $relative;
     }
 
     /**
      * @param  list<list<string>>  $rows
+     * @param  list<string>  $headers
      */
-    private function writeExcel(array $rows, array $headers = ['userid', 'phonenumber']): string
+    private function csvContents(array $rows, array $headers): string
     {
-        $path = tempnam(sys_get_temp_dir(), 'bulk_xlsx_').'.xlsx';
-        $writer = new Writer;
-        $writer->openToFile($path);
-        $writer->addRow(Row::fromValues($headers));
+        $handle = fopen('php://temp', 'r+');
+        fputcsv($handle, $headers);
         foreach ($rows as $row) {
-            $writer->addRow(Row::fromValues($row));
+            fputcsv($handle, $row);
         }
-        $writer->close();
+        rewind($handle);
+        $contents = stream_get_contents($handle);
+        fclose($handle);
 
-        return $path;
+        return $contents === false ? '' : $contents;
     }
 
     /**
      * @return list<list<string>>
      */
-    private function readExcelRows(string $path): array
+    private function readCsvRows(string $path): array
     {
-        $reader = new Reader;
-        $reader->open($path);
+        $stream = fopen($path, 'rb');
         $rows = [];
 
         try {
-            foreach ($reader->getSheetIterator() as $sheet) {
-                foreach ($sheet->getRowIterator() as $row) {
-                    $rows[] = array_map(static fn ($value): string => trim((string) $value), $row->toArray());
-                }
-
-                break;
+            while (($row = fgetcsv($stream)) !== false) {
+                $rows[] = array_map(static fn ($value): string => trim((string) $value), $row);
             }
         } finally {
-            $reader->close();
+            fclose($stream);
         }
 
         return $rows;

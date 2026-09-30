@@ -4,7 +4,7 @@ namespace App\Infrastructure\RabbitMq\Console;
 
 use App\Domains\Broker\Enums\BrokerQueuePurpose;
 use App\Domains\Bulk\Handlers\FinalizeBulkHandler;
-use App\Domains\Bulk\Handlers\ParseBulkExcelHandler;
+use App\Domains\Bulk\Handlers\ParseBulkCsvHandler;
 use App\Domains\Bulk\Handlers\ProcessBulkChunkHandler;
 use App\Infrastructure\RabbitMq\RabbitMqConsumer;
 use Illuminate\Console\Command;
@@ -18,7 +18,7 @@ class ConsumeByPurposeCommand extends Command
 
     public function handle(
         RabbitMqConsumer $consumer,
-        ParseBulkExcelHandler $parseHandler,
+        ParseBulkCsvHandler $parseHandler,
         ProcessBulkChunkHandler $chunkHandler,
         FinalizeBulkHandler $finalizeHandler,
     ): int {

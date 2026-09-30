@@ -48,13 +48,6 @@ return [
             'report' => false,
         ],
 
-        'bulk' => [
-            'driver' => 'local',
-            'root' => storage_path('app/bulk'),
-            'throw' => true,
-            'report' => false,
-        ],
-
         // Same as s3-worm-store: dedicated minio disk using AWS_* credentials.
         'minio' => [
             'driver' => 's3',

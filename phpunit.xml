@@ -33,6 +33,7 @@
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
         <env name="BULK_API_KEY" value="test-api-key"/>
+        <env name="BULK_INPUT_DISK" value="minio"/>
         <env name="WORM_DRIVER" value="local"/>
         <env name="CONSENT_SERVICE_BASE_URL" value=""/>
     </php>

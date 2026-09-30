@@ -9,18 +9,18 @@ use App\Domains\Bulk\Enums\BulkRowStatus;
 use App\Domains\Bulk\Models\BulkJob;
 use App\Domains\Bulk\Models\BulkJobChunk;
 use App\Domains\Bulk\Models\BulkJobRow;
-use App\Domains\Bulk\Services\Excel\BulkChunkWriter;
-use App\Domains\Bulk\Services\Excel\BulkExcelStreamer;
+use App\Domains\Bulk\Services\Csv\BulkChunkWriter;
+use App\Domains\Bulk\Services\Csv\BulkCsvStreamer;
 use App\Domains\Bulk\Services\Storage\WormStorage;
 use App\Infrastructure\RabbitMq\RabbitMqPublisher;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Throwable;
 
-class ParseBulkExcelHandler
+class ParseBulkCsvHandler
 {
     public function __construct(
-        private BulkExcelStreamer $streamer,
+        private BulkCsvStreamer $streamer,
         private BulkChunkWriter $chunkWriter,
         private WormStorage $wormStorage,
         private RabbitMqPublisher $publisher,
@@ -41,7 +41,7 @@ class ParseBulkExcelHandler
         $job->update(['status' => BulkJobStatus::Parsing]);
 
         $chunkSize = (int) config('bulk.chunk_size', 1000);
-        $disk = (string) config('bulk.input_disk', 'bulk');
+        $disk = (string) config('bulk.input_disk', 'minio');
 
         $buffer = [];
         $rowCount = 0;
@@ -70,7 +70,7 @@ class ParseBulkExcelHandler
                 'total_rows' => $rowCount,
                 'chunks_total' => $chunkIndex,
                 'status' => $rowCount === 0 ? BulkJobStatus::Failed : BulkJobStatus::Processing,
-                'error_summary' => $rowCount === 0 ? 'Excel contained no data rows.' : null,
+                'error_summary' => $rowCount === 0 ? 'CSV contained no data rows.' : null,
             ]);
 
             if ($rowCount === 0) {
@@ -104,7 +104,7 @@ class ParseBulkExcelHandler
 
         try {
             $objectKey = sprintf(
-                'bulk-chunks/%s/chunk-%04d-%s.xlsx',
+                'bulk-chunks/%s/chunk-%04d-%s.csv',
                 $job->uuid,
                 $chunkIndex,
                 (string) Str::uuid(),
@@ -122,7 +122,7 @@ class ParseBulkExcelHandler
                 ]);
 
                 $now = now();
-                $inserts = array_map(static fn (array $row) => [
+                $inserts = array_map(static fn (array $row): array => [
                     'bulk_job_id' => $job->id,
                     'chunk_id' => $chunk->id,
                     'row_number' => $row['row_number'],

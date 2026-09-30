@@ -17,7 +17,7 @@ class WormStorage
         return $this->archive->writeOnce(
             $path,
             $contents,
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'text/csv; charset=UTF-8',
         );
     }
 
@@ -26,7 +26,7 @@ class WormStorage
         return $this->archive->writeFileOnce(
             $path,
             $localAbsolutePath,
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'text/csv; charset=UTF-8',
         );
     }
 
