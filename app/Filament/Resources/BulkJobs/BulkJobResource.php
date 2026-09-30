@@ -15,16 +15,20 @@ use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Model;
+use UnitEnum;
 
 class BulkJobResource extends Resource
 {
     protected static ?string $model = BulkJob::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
-
     protected static ?string $recordTitleAttribute = 'uuid';
 
-    protected static ?string $navigationLabel = 'Bulk jobs';
+    protected static ?string $navigationLabel = 'Bulk Jobs';
+
+    protected static string|UnitEnum|null $navigationGroup = 'Bulk Management';
+
+    protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-clipboard-document-check';
+    protected static ?int $navigationSort = 1;
 
     public static function form(Schema $schema): Schema
     {
@@ -43,9 +47,7 @@ class BulkJobResource extends Resource
 
     public static function getRelations(): array
     {
-        return [
-            //
-        ];
+        return [];
     }
 
     public static function getPages(): array
