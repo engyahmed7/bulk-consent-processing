@@ -17,17 +17,20 @@ class BulkJobInfolist
                     ->description('General information about this bulk operation.')
                     ->icon('heroicon-o-briefcase')
                     ->columns(2)
+                    ->columnSpanFull()
                     ->schema([
                         TextEntry::make('uuid')
                             ->label('Process ID')
                             ->copyable()
                             ->copyMessage('Process ID copied')
                             ->copyMessageDuration(1500)
-                            ->fontFamily('mono'),
+                            ->fontFamily('mono')
+                            ->columnSpanFull(),
 
                         TextEntry::make('action')
                             ->label('Action')
-                            ->badge(),
+                            ->badge()
+                            ->color('info'),
 
                         TextEntry::make('status')
                             ->label('Status')
@@ -35,23 +38,22 @@ class BulkJobInfolist
                             ->color(fn(BulkJobStatus $state): string => match ($state) {
                                 BulkJobStatus::Completed => 'success',
                                 BulkJobStatus::Failed => 'danger',
-                                BulkJobStatus::Processing    => 'warning',
-                                BulkJobStatus::Partial  => 'gray',
+                                BulkJobStatus::Processing => 'warning',
+                                BulkJobStatus::Partial => 'gray',
                                 default => 'gray',
                             }),
-
-                        TextEntry::make('created_by')
-                            ->label('Created By'),
                     ]),
 
                 Section::make('Input File')
                     ->description('Source file used for this bulk operation.')
                     ->icon('heroicon-o-document')
-                    ->columns(2)
+                    ->columns(1)
+                    ->columnSpanFull()
                     ->schema([
                         TextEntry::make('original_filename')
                             ->label('CSV File')
-                            ->placeholder('—'),
+                            ->placeholder('—')
+                            ->weight('medium'),
 
                         TextEntry::make('input_path')
                             ->label('MinIO Path')
@@ -66,29 +68,35 @@ class BulkJobInfolist
                     ->description('Progress and results of the bulk operation.')
                     ->icon('heroicon-o-chart-bar')
                     ->columns(4)
+                    ->columnSpanFull()
                     ->schema([
                         TextEntry::make('total_rows')
                             ->label('Total Rows')
-                            ->numeric(),
+                            ->numeric()
+                            ->weight('bold'),
 
                         TextEntry::make('processed_rows')
                             ->label('Processed')
-                            ->numeric(),
+                            ->numeric()
+                            ->weight('bold'),
 
                         TextEntry::make('success_rows')
                             ->label('Successful')
                             ->numeric()
+                            ->weight('bold')
                             ->color('success'),
 
                         TextEntry::make('failed_rows')
                             ->label('Failed')
                             ->numeric()
+                            ->weight('bold')
                             ->color('danger'),
                     ]),
 
                 Section::make('Errors')
                     ->description('Details about failed rows, if any.')
                     ->icon('heroicon-o-exclamation-triangle')
+                    ->columnSpanFull()
                     ->schema([
                         TextEntry::make('error_summary')
                             ->label('Error Summary')
@@ -101,6 +109,7 @@ class BulkJobInfolist
                 Section::make('Timestamps')
                     ->icon('heroicon-o-clock')
                     ->columns(2)
+                    ->columnSpanFull()
                     ->schema([
                         TextEntry::make('created_at')
                             ->label('Created At')
