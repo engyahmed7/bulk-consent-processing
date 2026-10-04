@@ -11,6 +11,7 @@
         "laravel/framework": "^13.17",
         "laravel/tinker": "^3.0",
         "league/flysystem-aws-s3-v3": "^3.35",
+        "nwidart/laravel-modules": "^13.0",
         "openspout/openspout": "^4.23",
         "php-amqplib/php-amqplib": "^3.7"
     },
@@ -28,7 +29,9 @@
         "psr-4": {
             "App\\": "app/",
             "Database\\Factories\\": "database/factories/",
-            "Database\\Seeders\\": "database/seeders/"
+            "Database\\Seeders\\": "database/seeders/",
+            "Modules\\Core\\": "Modules/Core/",
+            "Modules\\Core\\Features\\RabbitMQ\\": "Modules/RabbitMQ/"
         }
     },
     "autoload-dev": {
@@ -76,6 +79,11 @@
     "extra": {
         "laravel": {
             "dont-discover": []
+        },
+        "merge-plugin": {
+            "include": [
+                "Modules/*/composer.json"
+            ]
         }
     },
     "config": {
@@ -84,7 +92,8 @@
         "sort-packages": true,
         "allow-plugins": {
             "pestphp/pest-plugin": true,
-            "php-http/discovery": true
+            "php-http/discovery": true,
+            "wikimedia/composer-merge-plugin": true
         }
     },
     "minimum-stability": "stable",

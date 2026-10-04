@@ -14,4 +14,9 @@ return [
 
     'required_headers' => ['userid', 'phonenumber'],
 
+    'validation_rules' => [
+        'userid' => ['required', 'bulk_userid'],
+        'phonenumber' => ['required', 'bulk_phonenumber'],
+    ],
+
 ];

@@ -2,33 +2,33 @@
 
 namespace App\Domains\Bulk\Handlers;
 
-use App\Domains\Broker\Enums\BrokerQueuePurpose;
 use App\Domains\Bulk\Enums\BulkChunkStatus;
+use App\Domains\Bulk\Enums\BulkJobStatus;
 use App\Domains\Bulk\Enums\BulkRowStatus;
+use App\Domains\Bulk\Messages\FinalizeBulkJobRequested;
 use App\Domains\Bulk\Models\BulkJob;
 use App\Domains\Bulk\Models\BulkJobChunk;
 use App\Domains\Bulk\Models\BulkJobRow;
 use App\Domains\Bulk\Services\Consent\ConsentClientInterface;
 use App\Domains\Bulk\Services\Validation\RowValidator;
-use App\Infrastructure\RabbitMq\RabbitMqPublisher;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Modules\Core\Features\RabbitMQ\Contracts\MessageHandler;
+use Modules\Core\Features\RabbitMQ\Messages\Envelope;
+use Modules\Core\Features\RabbitMQ\Publishing\Outbox;
 use Throwable;
 
-class ProcessBulkChunkHandler
+class ProcessBulkChunkHandler implements MessageHandler
 {
     public function __construct(
         private RowValidator $rowValidator,
         private ConsentClientInterface $consentClient,
-        private RabbitMqPublisher $publisher,
+        private Outbox $outbox,
     ) {}
 
-    /**
-     * @param  array<string, mixed>  $payload
-     */
-    public function handle(array $payload): void
+    public function handle(Envelope $envelope): void
     {
-        $chunkId = (int) ($payload['chunk_id'] ?? 0);
+        $chunkId = (int) ($envelope->payload['chunk_id'] ?? 0);
         $chunk = BulkJobChunk::query()->with('job')->findOrFail($chunkId);
 
         $claimed = BulkJobChunk::query()
@@ -105,17 +105,27 @@ class ProcessBulkChunkHandler
                 ->count();
 
             DB::transaction(function () use ($chunk, $job, $success, $failed): void {
-                BulkJobChunk::query()->whereKey($chunk->id)->update([
-                    'status' => BulkChunkStatus::Completed,
-                    'processing_started_at' => null,
-                ]);
+                $lockedJob = BulkJob::query()->lockForUpdate()->findOrFail($job->id);
+                $completed = BulkJobChunk::query()->whereKey($chunk->id)
+                    ->where('status', BulkChunkStatus::Processing)
+                    ->update([
+                        'status' => BulkChunkStatus::Completed,
+                        'processing_started_at' => null,
+                    ]);
 
-                BulkJob::query()->whereKey($job->id)->update([
-                    'processed_rows' => DB::raw('processed_rows + '.($success + $failed)),
-                    'success_rows' => DB::raw('success_rows + '.$success),
-                    'failed_rows' => DB::raw('failed_rows + '.$failed),
-                    'chunks_done' => DB::raw('chunks_done + 1'),
-                ]);
+                if ($completed !== 1) {
+                    return;
+                }
+
+                $lockedJob->processed_rows += $success + $failed;
+                $lockedJob->success_rows += $success;
+                $lockedJob->failed_rows += $failed;
+                $lockedJob->chunks_done++;
+                $lockedJob->save();
+
+                if ($lockedJob->chunks_done >= $lockedJob->chunks_total && $lockedJob->chunks_total > 0) {
+                    $this->outbox->record(new FinalizeBulkJobRequested($lockedJob->id));
+                }
             });
 
             Log::info('Bulk CSV validation chunk completed', [
@@ -139,13 +149,26 @@ class ProcessBulkChunkHandler
             throw $exception;
         }
 
-        $job->refresh();
+    }
 
-        if ($job->chunks_done >= $job->chunks_total && $job->chunks_total > 0) {
-            $this->publisher->publish(BrokerQueuePurpose::BulkFinalize, [
-                'type' => 'finalize_bulk',
-                'bulk_job_id' => $job->id,
-            ]);
+    public function failed(Envelope $envelope, Throwable $exception): void
+    {
+        $chunkId = (int) ($envelope->payload['chunk_id'] ?? 0);
+        $chunk = BulkJobChunk::query()->find($chunkId);
+
+        if (! $chunk instanceof BulkJobChunk) {
+            return;
         }
+
+        DB::transaction(function () use ($chunk, $exception): void {
+            BulkJobChunk::query()->whereKey($chunk->id)->update([
+                'status' => BulkChunkStatus::Failed,
+                'processing_started_at' => null,
+            ]);
+            BulkJob::query()->whereKey($chunk->bulk_job_id)->update([
+                'status' => BulkJobStatus::Failed,
+                'error_summary' => $exception->getMessage(),
+            ]);
+        });
     }
 }

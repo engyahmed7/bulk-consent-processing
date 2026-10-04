@@ -2,27 +2,53 @@
 
 namespace App\Domains\Bulk\Services\Validation;
 
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\ValidationException;
+
 class RowValidator
 {
+    /**
+     * Validate a single row of the bulk CSV.
+     */
     public function validate(?string $userId, ?string $phoneNumber): RowValidationResult
     {
-        $userId = trim((string) $userId);
-        $phoneNumber = trim((string) $phoneNumber);
+        $data = [
+            'userid' => $userId,
+            'phonenumber' => $phoneNumber,
+        ];
 
-        if ($userId === '') {
-            return RowValidationResult::invalid($userId, $phoneNumber, 'missing_userid', 'userid is required.');
+        $rules = config('bulk.validation_rules', []);
+
+        $validator = Validator::make($data, $rules);
+
+        if ($validator->fails()) {
+            $errors = $validator->errors();
+            $firstErrorKey = $errors->first() ? array_key_first($errors->getMessages()) : 'general';
+            $errorMessage = $errors->first();
+
+            return RowValidationResult::invalid(
+                (string) $userId,
+                (string) $phoneNumber,
+                $this->mapErrorCode($firstErrorKey),
+                $errorMessage
+            );
         }
 
-        if ($phoneNumber === '') {
-            return RowValidationResult::invalid($userId, $phoneNumber, 'missing_phonenumber', 'phonenumber is required.');
-        }
+        // Normalize the phone number for the OK result
+        $normalizedPhone = preg_replace('/[\s\-()]/', '', (string) $phoneNumber);
 
-        $normalizedPhone = preg_replace('/[\s\-()]/', '', $phoneNumber) ?? $phoneNumber;
+        return RowValidationResult::ok((string) $userId, $normalizedPhone);
+    }
 
-        if (! preg_match('/^\+?[0-9]{8,15}$/', $normalizedPhone)) {
-            return RowValidationResult::invalid($userId, $phoneNumber, 'invalid_phonenumber', 'phonenumber format is invalid.');
-        }
-
-        return RowValidationResult::ok($userId, $normalizedPhone);
+    /**
+     * Map Laravel validation keys to existing bulk error codes.
+     */
+    protected function mapErrorCode(string $key): string
+    {
+        return match ($key) {
+            'userid' => 'missing_userid',
+            'phonenumber' => 'missing_phonenumber',
+            default => 'invalid_data',
+        };
     }
 }

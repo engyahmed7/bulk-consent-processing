@@ -4,9 +4,9 @@ namespace Tests\Feature;
 
 use App\Domains\Bulk\Enums\BulkJobStatus;
 use App\Domains\Bulk\Enums\ConsentAction;
+use App\Domains\Bulk\Messaging\BulkMessaging;
 use App\Domains\Bulk\Models\BulkJob;
 use App\Filament\Resources\BulkJobs\Pages\CreateBulkJob;
-use App\Infrastructure\RabbitMq\RabbitMqPublisher;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -23,10 +23,6 @@ class CreateBulkJobTest extends TestCase
         parent::setUp();
 
         Storage::fake('minio');
-
-        $this->mock(RabbitMqPublisher::class, function ($mock): void {
-            $mock->shouldReceive('publish')->andReturnNull();
-        });
     }
 
     public function test_guests_are_redirected_away_from_the_create_page(): void
@@ -59,6 +55,10 @@ class CreateBulkJobTest extends TestCase
         $this->assertTrue(Storage::disk('minio')->exists($job->input_path));
         $this->assertStringStartsWith('inputs/', $job->input_path);
         $this->assertStringEndsWith('.csv', $job->input_path);
+        $this->assertDatabaseHas('outbox_messages', [
+            'exchange' => BulkMessaging::EVENTS_EXCHANGE,
+            'routing_key' => BulkMessaging::PARSE_REQUESTED,
+        ]);
     }
 
     public function test_livewire_temporary_uploads_use_minio_outside_testing(): void

@@ -2,44 +2,56 @@
 
 namespace App\Domains\Bulk\Handlers;
 
-use App\Domains\Broker\Enums\BrokerQueuePurpose;
 use App\Domains\Bulk\Enums\BulkChunkStatus;
 use App\Domains\Bulk\Enums\BulkJobStatus;
 use App\Domains\Bulk\Enums\BulkRowStatus;
+use App\Domains\Bulk\Messages\ProcessBulkChunkRequested;
 use App\Domains\Bulk\Models\BulkJob;
 use App\Domains\Bulk\Models\BulkJobChunk;
 use App\Domains\Bulk\Models\BulkJobRow;
 use App\Domains\Bulk\Services\Csv\BulkChunkWriter;
 use App\Domains\Bulk\Services\Csv\BulkCsvStreamer;
 use App\Domains\Bulk\Services\Storage\WormStorage;
-use App\Infrastructure\RabbitMq\RabbitMqPublisher;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Modules\Core\Features\RabbitMQ\Contracts\MessageHandler;
+use Modules\Core\Features\RabbitMQ\Messages\Envelope;
+use Modules\Core\Features\RabbitMQ\Publishing\Outbox;
 use Throwable;
 
-class ParseBulkCsvHandler
+class ParseBulkCsvHandler implements MessageHandler
 {
     public function __construct(
         private BulkCsvStreamer $streamer,
         private BulkChunkWriter $chunkWriter,
         private WormStorage $wormStorage,
-        private RabbitMqPublisher $publisher,
+        private Outbox $outbox,
     ) {}
 
-    /**
-     * @param  array<string, mixed>  $payload
-     */
-    public function handle(array $payload): void
+    public function handle(Envelope $envelope): void
     {
-        $jobId = (int) ($payload['bulk_job_id'] ?? 0);
+        $jobId = (int) ($envelope->payload['bulk_job_id'] ?? 0);
         $job = BulkJob::query()->findOrFail($jobId);
 
         if (in_array($job->status, [BulkJobStatus::Processing, BulkJobStatus::Completed, BulkJobStatus::Partial, BulkJobStatus::Finalizing], true)) {
             return;
         }
 
-        $job->update(['status' => BulkJobStatus::Parsing]);
+        DB::transaction(function () use ($job): void {
+            $job->rows()->delete();
+            $job->chunks()->delete();
+            $job->update([
+                'status' => BulkJobStatus::Parsing,
+                'total_rows' => 0,
+                'chunks_total' => 0,
+                'chunks_done' => 0,
+                'processed_rows' => 0,
+                'success_rows' => 0,
+                'failed_rows' => 0,
+                'error_summary' => null,
+            ]);
+        });
 
         Log::info('Bulk CSV parsing started', [
             'bulk_job_id' => $job->id,
@@ -72,12 +84,22 @@ class ParseBulkCsvHandler
                 $chunkIndex++;
             }
 
-            $job->update([
-                'total_rows' => $rowCount,
-                'chunks_total' => $chunkIndex,
-                'status' => $rowCount === 0 ? BulkJobStatus::Failed : BulkJobStatus::Processing,
-                'error_summary' => $rowCount === 0 ? 'CSV contained no data rows.' : null,
-            ]);
+            DB::transaction(function () use ($job, $rowCount, $chunkIndex): void {
+                $job->update([
+                    'total_rows' => $rowCount,
+                    'chunks_total' => $chunkIndex,
+                    'status' => $rowCount === 0 ? BulkJobStatus::Failed : BulkJobStatus::Processing,
+                    'error_summary' => $rowCount === 0 ? 'CSV contained no data rows.' : null,
+                ]);
+
+                if ($rowCount === 0) {
+                    return;
+                }
+
+                $job->chunks()->orderBy('chunk_index')->each(function (BulkJobChunk $chunk): void {
+                    $this->outbox->record(new ProcessBulkChunkRequested($chunk->id));
+                });
+            });
 
             if ($rowCount === 0) {
                 Log::warning('Bulk CSV contained no data rows', [
@@ -94,14 +116,6 @@ class ParseBulkCsvHandler
                 'total_rows' => $rowCount,
                 'chunks_total' => $chunkIndex,
             ]);
-
-            $job->chunks()->orderBy('chunk_index')->each(function (BulkJobChunk $chunk) use ($job): void {
-                $this->publisher->publish(BrokerQueuePurpose::BulkValidate, [
-                    'type' => 'process_chunk',
-                    'bulk_job_id' => $job->id,
-                    'chunk_id' => $chunk->id,
-                ]);
-            });
         } catch (Throwable $exception) {
             $job->update([
                 'status' => BulkJobStatus::Failed,
@@ -110,6 +124,16 @@ class ParseBulkCsvHandler
 
             throw $exception;
         }
+    }
+
+    public function failed(Envelope $envelope, Throwable $exception): void
+    {
+        BulkJob::query()
+            ->whereKey((int) ($envelope->payload['bulk_job_id'] ?? 0))
+            ->update([
+                'status' => BulkJobStatus::Failed,
+                'error_summary' => $exception->getMessage(),
+            ]);
     }
 
     /**

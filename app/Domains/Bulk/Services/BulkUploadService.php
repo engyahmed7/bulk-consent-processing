@@ -2,20 +2,20 @@
 
 namespace App\Domains\Bulk\Services;
 
-use App\Domains\Broker\Enums\BrokerQueuePurpose;
 use App\Domains\Bulk\Enums\BulkJobStatus;
 use App\Domains\Bulk\Enums\ConsentAction;
+use App\Domains\Bulk\Messages\ParseBulkCsvRequested;
 use App\Domains\Bulk\Models\BulkJob;
-use App\Infrastructure\RabbitMq\RabbitMqPublisher;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Modules\Core\Features\RabbitMQ\Publishing\Outbox;
 
 class BulkUploadService
 {
     public function __construct(
-        private RabbitMqPublisher $publisher,
+        private Outbox $outbox,
     ) {}
 
     public function upload(UploadedFile $file, ConsentAction $action, ?string $createdBy = null): BulkJob
@@ -30,27 +30,26 @@ class BulkUploadService
             throw new \RuntimeException('Unable to store the uploaded CSV file.');
         }
 
-        $job = BulkJob::query()->create([
-            'uuid' => $uuid,
-            'action' => $action,
-            'status' => BulkJobStatus::Queued,
-            'original_filename' => $file->getClientOriginalName(),
-            'input_path' => $storedPath,
-            'created_by' => $createdBy,
-        ]);
-
-        DB::afterCommit(function () use ($job): void {
-            $this->publisher->publish(BrokerQueuePurpose::BulkParse, [
-                'type' => 'parse_bulk',
-                'bulk_job_id' => $job->id,
+        $job = DB::transaction(function () use ($uuid, $action, $file, $storedPath, $createdBy): BulkJob {
+            $job = BulkJob::query()->create([
+                'uuid' => $uuid,
+                'action' => $action,
+                'status' => BulkJobStatus::Queued,
+                'original_filename' => $file->getClientOriginalName(),
+                'input_path' => $storedPath,
+                'created_by' => $createdBy,
             ]);
 
-            Log::info('Bulk CSV upload queued for parsing', [
-                'bulk_job_id' => $job->id,
-                'bulk_job_uuid' => $job->uuid,
-                'action' => $job->action->value,
-            ]);
+            $this->outbox->record(new ParseBulkCsvRequested($job->id));
+
+            return $job;
         });
+
+        Log::info('Bulk CSV upload queued for parsing', [
+            'bulk_job_id' => $job->id,
+            'bulk_job_uuid' => $job->uuid,
+            'action' => $job->action->value,
+        ]);
 
         return $job;
     }

@@ -7,21 +7,20 @@ use App\Domains\Bulk\Models\BulkJob;
 use App\Domains\Bulk\Services\Csv\BulkResultWriter;
 use App\Domains\Bulk\Services\Storage\WormStorage;
 use Illuminate\Support\Facades\Log;
+use Modules\Core\Features\RabbitMQ\Contracts\MessageHandler;
+use Modules\Core\Features\RabbitMQ\Messages\Envelope;
 use Throwable;
 
-class FinalizeBulkHandler
+class FinalizeBulkHandler implements MessageHandler
 {
     public function __construct(
         private BulkResultWriter $resultWriter,
         private WormStorage $wormStorage,
     ) {}
 
-    /**
-     * @param  array<string, mixed>  $payload
-     */
-    public function handle(array $payload): void
+    public function handle(Envelope $envelope): void
     {
-        $jobId = (int) ($payload['bulk_job_id'] ?? 0);
+        $jobId = (int) ($envelope->payload['bulk_job_id'] ?? 0);
         $job = BulkJob::query()->findOrFail($jobId);
 
         if (in_array($job->status, [BulkJobStatus::Completed, BulkJobStatus::Partial], true) && filled($job->worm_result_path)) {
@@ -69,5 +68,13 @@ class FinalizeBulkHandler
                 @unlink($tempPath);
             }
         }
+    }
+
+    public function failed(Envelope $envelope, Throwable $exception): void
+    {
+        BulkJob::query()->whereKey((int) ($envelope->payload['bulk_job_id'] ?? 0))->update([
+            'status' => BulkJobStatus::Failed,
+            'error_summary' => $exception->getMessage(),
+        ]);
     }
 }

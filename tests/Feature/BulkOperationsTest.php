@@ -2,8 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Domains\Broker\Enums\BrokerQueuePurpose;
-use App\Domains\Broker\Services\BrokerQueueSyncService;
 use App\Domains\Bulk\Enums\BulkChunkStatus;
 use App\Domains\Bulk\Enums\BulkJobStatus;
 use App\Domains\Bulk\Enums\BulkRowStatus;
@@ -11,6 +9,7 @@ use App\Domains\Bulk\Enums\ConsentAction;
 use App\Domains\Bulk\Handlers\FinalizeBulkHandler;
 use App\Domains\Bulk\Handlers\ParseBulkCsvHandler;
 use App\Domains\Bulk\Handlers\ProcessBulkChunkHandler;
+use App\Domains\Bulk\Messaging\BulkMessaging;
 use App\Domains\Bulk\Models\BulkJob;
 use App\Domains\Bulk\Models\BulkJobChunk;
 use App\Domains\Bulk\Models\BulkJobRow;
@@ -19,12 +18,16 @@ use App\Domains\Bulk\Services\Consent\ConsentClientInterface;
 use App\Domains\Bulk\Services\Consent\ConsentResult;
 use App\Domains\Bulk\Services\Storage\WormArchive;
 use App\Domains\Bulk\Services\Storage\WormStorage;
-use App\Infrastructure\RabbitMq\RabbitMqConsumer;
-use App\Infrastructure\RabbitMq\RabbitMqPublisher;
-use Closure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
+use Modules\Core\Features\RabbitMQ\Contracts\MessagePublisher;
+use Modules\Core\Features\RabbitMQ\Messages\Envelope;
+use Modules\Core\Features\RabbitMQ\Models\OutboxMessage;
+use Modules\Core\Features\RabbitMQ\Publishing\Outbox;
+use Modules\Core\Features\RabbitMQ\RabbitMQServiceProvider;
+use Modules\Core\Features\RabbitMQ\Topology\MessagingRegistry;
+use Modules\Core\Kernel\CoreServiceProvider;
 use Tests\TestCase;
 
 class BulkOperationsTest extends TestCase
@@ -38,43 +41,24 @@ class BulkOperationsTest extends TestCase
         Storage::fake('minio');
         Storage::disk('minio')->makeDirectory('inputs');
 
-        $this->mock(RabbitMqPublisher::class, function ($mock): void {
-            $mock->shouldReceive('publish')->andReturnNull();
-        });
     }
 
-    public function test_broker_queue_can_be_registered_via_api(): void
+    public function test_bulk_queues_are_registered_with_the_rabbitmq_module(): void
     {
-        $response = $this->withHeader('X-API-Key', 'test-api-key')
-            ->postJson('/api/broker-queues', [
-                'purpose' => BrokerQueuePurpose::BulkParse->value,
-                'queue_name' => 'ops.bulk.parse.v1',
-                'routing_key' => 'ops.bulk.parse.v1',
-            ]);
+        $this->assertInstanceOf(CoreServiceProvider::class, app()->getProvider(CoreServiceProvider::class));
+        $this->assertInstanceOf(RabbitMQServiceProvider::class, app()->getProvider(RabbitMQServiceProvider::class));
 
-        $response->assertCreated()
-            ->assertJsonPath('data.queue_name', 'ops.bulk.parse.v1');
+        $registry = app(MessagingRegistry::class);
 
-        $this->assertDatabaseHas('broker_queues', [
-            'purpose' => 'bulk_parse',
-            'queue_name' => 'ops.bulk.parse.v1',
-            'is_active' => true,
-        ]);
-    }
-
-    public function test_consumer_startup_does_not_sync_and_mutate_broker_queue_mappings(): void
-    {
-        $this->mock(BrokerQueueSyncService::class, function ($mock): void {
-            $mock->shouldReceive('sync')->never();
-        });
-        $this->mock(RabbitMqConsumer::class, function ($mock): void {
-            $mock->shouldReceive('consume')
-                ->once()
-                ->withArgs(static fn (BrokerQueuePurpose $purpose, Closure $handler): bool => $purpose === BrokerQueuePurpose::BulkValidate);
-        });
-
-        $this->artisan('bulk:consume', ['purpose' => 'bulk_validate'])
-            ->assertExitCode(0);
+        $this->assertSame(
+            [BulkMessaging::PARSE_QUEUE, BulkMessaging::VALIDATE_QUEUE, BulkMessaging::FINALIZE_QUEUE],
+            array_map(static fn ($queue): string => $queue->name, $registry->queues()),
+        );
+        $this->assertSame(
+            [ParseBulkCsvHandler::class, ProcessBulkChunkHandler::class, FinalizeBulkHandler::class],
+            array_map(static fn ($queue): string => $queue->handler, $registry->queues()),
+        );
+        $this->artisan('rabbitmq:topology')->assertSuccessful();
     }
 
     public function test_bulk_job_upload_is_not_available_on_the_api(): void
@@ -101,6 +85,32 @@ class BulkOperationsTest extends TestCase
         $this->assertStringStartsWith('inputs/'.$job->uuid.'/', $job->input_path);
         $this->assertStringEndsWith('.csv', $job->input_path);
         $this->assertStringNotContainsString(storage_path('app'), $job->input_path);
+        $message = OutboxMessage::query()->where('routing_key', BulkMessaging::PARSE_REQUESTED)->firstOrFail();
+        $this->assertSame(BulkMessaging::EVENTS_EXCHANGE, $message->exchange);
+        $this->assertSame(['bulk_job_id' => $job->id], $message->payload);
+    }
+
+    public function test_outbox_relay_publishes_recorded_messages_and_marks_them_published(): void
+    {
+        $publisher = $this->mock(MessagePublisher::class);
+        $publisher->shouldReceive('publish')
+            ->once()
+            ->withArgs(fn (string $exchange, Envelope $envelope): bool => $exchange === BulkMessaging::EVENTS_EXCHANGE
+                && $envelope->routingKey === BulkMessaging::PARSE_REQUESTED);
+
+        $job = app(BulkUploadService::class)->upload(
+            $this->makeCsvUpload([['u1', '966500000001']]),
+            ConsentAction::OptIn,
+            'ops@example.test',
+        );
+
+        $published = app(Outbox::class)->relayBatch(100);
+
+        $message = OutboxMessage::query()->where('routing_key', BulkMessaging::PARSE_REQUESTED)->firstOrFail();
+
+        $this->assertSame(1, $published);
+        $this->assertSame(['bulk_job_id' => $job->id], $message->payload);
+        $this->assertNotNull($message->published_at);
     }
 
     public function test_parse_handler_creates_chunks_and_rows(): void
@@ -134,9 +144,9 @@ class BulkOperationsTest extends TestCase
             'input_path' => $path,
         ]);
 
-        app(ParseBulkCsvHandler::class)->handle([
+        app(ParseBulkCsvHandler::class)->handle($this->envelope([
             'bulk_job_id' => $job->id,
-        ]);
+        ]));
 
         $job->refresh();
 
@@ -149,6 +159,7 @@ class BulkOperationsTest extends TestCase
         $this->assertStringEndsWith('.csv', $archivedPaths[0]);
         $this->assertSame(['source_row', 'userid', 'phonenumber', 'email', 'payment plan'], $archivedRows[0][0]);
         $this->assertSame(['2', 'u1', '966500000001', 'u1@example.test', 'gold'], $archivedRows[0][1]);
+        $this->assertDatabaseCount('outbox_messages', 2);
     }
 
     public function test_chunk_handler_marks_invalid_phone_without_consent_call(): void
@@ -182,10 +193,9 @@ class BulkOperationsTest extends TestCase
             'status' => BulkRowStatus::Pending,
         ]);
 
-        app(ProcessBulkChunkHandler::class)->handle([
-            'bulk_job_id' => $job->id,
+        app(ProcessBulkChunkHandler::class)->handle($this->envelope([
             'chunk_id' => $chunk->id,
-        ]);
+        ]));
 
         $row = BulkJobRow::query()->first();
         $this->assertSame(BulkRowStatus::Failed, $row->status);
@@ -225,15 +235,18 @@ class BulkOperationsTest extends TestCase
             'status' => BulkRowStatus::Pending,
         ]);
 
-        app(ProcessBulkChunkHandler::class)->handle([
-            'bulk_job_id' => $job->id,
+        app(ProcessBulkChunkHandler::class)->handle($this->envelope([
             'chunk_id' => $chunk->id,
-        ]);
+        ]));
 
         $this->assertSame(BulkRowStatus::Success, BulkJobRow::query()->first()->status);
         $job->refresh();
         $this->assertSame(1, $job->success_rows);
         $this->assertSame(1, $job->chunks_done);
+        $this->assertDatabaseHas('outbox_messages', [
+            'exchange' => BulkMessaging::EVENTS_EXCHANGE,
+            'routing_key' => BulkMessaging::FINALIZE_REQUESTED,
+        ]);
     }
 
     public function test_chunk_handler_does_not_claim_a_chunk_already_processing(): void
@@ -268,7 +281,7 @@ class BulkOperationsTest extends TestCase
             'status' => BulkRowStatus::Pending,
         ]);
 
-        app(ProcessBulkChunkHandler::class)->handle(['chunk_id' => $chunk->id]);
+        app(ProcessBulkChunkHandler::class)->handle($this->envelope(['chunk_id' => $chunk->id]));
 
         $this->assertSame(1, $chunk->fresh()->attempts);
         $this->assertSame(BulkRowStatus::Pending, BulkJobRow::query()->firstOrFail()->status);
@@ -338,7 +351,7 @@ class BulkOperationsTest extends TestCase
             'error_message' => 'phonenumber format is invalid.',
         ]);
 
-        app(FinalizeBulkHandler::class)->handle(['bulk_job_id' => $job->id]);
+        app(FinalizeBulkHandler::class)->handle($this->envelope(['bulk_job_id' => $job->id]));
 
         $job->refresh();
         $this->assertSame(BulkJobStatus::Partial, $job->status);
@@ -412,5 +425,18 @@ class BulkOperationsTest extends TestCase
         }
 
         return $rows;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function envelope(array $payload): Envelope
+    {
+        return new Envelope(
+            messageId: 'test-message',
+            routingKey: 'test.routing-key',
+            payload: $payload,
+            occurredAt: now()->toImmutable(),
+        );
     }
 }
