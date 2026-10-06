@@ -30,6 +30,7 @@
             "App\\": "app/",
             "Database\\Factories\\": "database/factories/",
             "Database\\Seeders\\": "database/seeders/",
+            "Modules\\Bulk\\": "Modules/Bulk/app/",
             "Modules\\Core\\": "Modules/Core/",
             "Modules\\Core\\Features\\RabbitMQ\\": "Modules/RabbitMQ/"
         }

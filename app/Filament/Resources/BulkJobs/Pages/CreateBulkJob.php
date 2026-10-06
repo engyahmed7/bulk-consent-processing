@@ -2,8 +2,6 @@
 
 namespace App\Filament\Resources\BulkJobs\Pages;
 
-use App\Domains\Bulk\Enums\ConsentAction;
-use App\Domains\Bulk\Services\BulkUploadService;
 use App\Filament\Resources\BulkJobs\BulkJobResource;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\CreateRecord;
@@ -12,6 +10,8 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+use Modules\Bulk\Operations\BulkUploadService;
+use Modules\Bulk\Shared\Enums\ConsentAction;
 use RuntimeException;
 
 class CreateBulkJob extends CreateRecord
@@ -23,7 +23,7 @@ class CreateBulkJob extends CreateRecord
     /**
      * @param  array<string, mixed>  $data
      */
-    //after create
+    // after create
     protected function handleRecordCreation(array $data): Model
     {
         $file = $this->resolveUploadedFile($data['file'] ?? null);

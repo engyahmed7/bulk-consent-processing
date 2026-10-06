@@ -2,11 +2,11 @@
 
 namespace App\Filament\Resources\BulkJobs\Schemas;
 
-use App\Domains\Bulk\Enums\ConsentAction;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Select;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Modules\Bulk\Shared\Enums\ConsentAction;
 
 class BulkJobForm
 {
@@ -42,7 +42,7 @@ class BulkJobForm
                             ->rules([
                                 'file',
                                 'mimes:csv,txt',
-                                'max:' . (int) config('bulk.max_upload_kb', 51200),
+                                'max:'.(int) config('bulk.max_upload_kb', 51200),
                             ])
                             ->maxSize((int) config('bulk.max_upload_kb', 51200))
                             ->required()

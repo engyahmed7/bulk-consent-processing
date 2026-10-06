@@ -2,12 +2,12 @@
 
 namespace App\Filament\Resources\BulkJobs\Tables;
 
-use App\Domains\Bulk\Models\BulkJob;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\ViewAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Modules\Bulk\Shared\Models\BulkJob;
 
 class BulkJobsTable
 {

@@ -2,10 +2,10 @@
 
 namespace App\Filament\Resources\BulkJobs\Schemas;
 
-use App\Domains\Bulk\Enums\BulkJobStatus;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Modules\Bulk\Shared\Enums\BulkJobStatus;
 
 class BulkJobInfolist
 {
@@ -35,7 +35,7 @@ class BulkJobInfolist
                         TextEntry::make('status')
                             ->label('Status')
                             ->badge()
-                            ->color(fn(BulkJobStatus $state): string => match ($state) {
+                            ->color(fn (BulkJobStatus $state): string => match ($state) {
                                 BulkJobStatus::Completed => 'success',
                                 BulkJobStatus::Failed => 'danger',
                                 BulkJobStatus::Processing => 'warning',
@@ -104,7 +104,7 @@ class BulkJobInfolist
                             ->prose()
                             ->columnSpanFull(),
                     ])
-                    ->visible(fn($record): bool => filled($record?->error_summary)),
+                    ->visible(fn ($record): bool => filled($record?->error_summary)),
 
                 Section::make('Timestamps')
                     ->icon('heroicon-o-clock')

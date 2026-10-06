@@ -1,8 +1,8 @@
 <?php
 
-use App\Domains\Bulk\Http\Controllers\BulkJobController;
-use App\Domains\Bulk\Http\Middleware\EnsureApiKey;
 use Illuminate\Support\Facades\Route;
+use Modules\Bulk\Http\Controllers\BulkJobController;
+use Modules\Bulk\Http\Middleware\EnsureApiKey;
 
 Route::middleware(EnsureApiKey::class)->group(function (): void {
     Route::get('bulk-jobs/{bulkJob}', [BulkJobController::class, 'show']);

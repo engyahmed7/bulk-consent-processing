@@ -2,7 +2,6 @@
 
 namespace App\Filament\Resources\BulkJobs;
 
-use App\Domains\Bulk\Models\BulkJob;
 use App\Filament\Resources\BulkJobs\Pages\CreateBulkJob;
 use App\Filament\Resources\BulkJobs\Pages\ListBulkJobs;
 use App\Filament\Resources\BulkJobs\Pages\ViewBulkJob;
@@ -12,9 +11,9 @@ use App\Filament\Resources\BulkJobs\Tables\BulkJobsTable;
 use BackedEnum;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
-use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Model;
+use Modules\Bulk\Shared\Models\BulkJob;
 use UnitEnum;
 
 class BulkJobResource extends Resource
@@ -28,6 +27,7 @@ class BulkJobResource extends Resource
     protected static string|UnitEnum|null $navigationGroup = 'Bulk Management';
 
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-clipboard-document-check';
+
     protected static ?int $navigationSort = 1;
 
     public static function form(Schema $schema): Schema

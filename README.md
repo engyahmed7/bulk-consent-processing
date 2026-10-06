@@ -66,9 +66,27 @@ sequenceDiagram
     F->>S: Archive result CSV
 ```
 
+### Bulk module structure
+
+The bulk feature is owned by `Modules/Bulk`; the host app keeps the Filament pages and route registration as adapters.
+
+```text
+Modules/Bulk/app/
+├── Operations/       upload use case
+├── Parsing/          CSV streaming, chunk writing, parse handler
+├── Processing/       chunk handler, consent integration, validation
+├── Finalization/     final result writer and finalization handler
+├── Shared/           models, enums, messages, storage, shared CSV helpers
+├── Http/             status/result API adapters
+├── Console/          bulk-specific Artisan commands
+└── Providers/        module boot, messaging registration, config and migrations
+```
+
+The three message handlers are independently registered in the module's `BulkMessaging` topology declaration. Shared CSV/storage/model logic stays under `Shared` instead of being duplicated among parsing, processing, and finalization.
+
 ### Declared RabbitMQ topology
 
-The bulk pipeline declares its exchange, routing keys, queues, handlers, retry policy, and scaling in `app/Domains/Bulk/Messaging/BulkMessaging.php`. The module creates durable work, retry, and dead-letter quorum queues for each declared queue.
+The bulk pipeline declares its exchange, routing keys, queues, handlers, retry policy, and scaling in `Modules/Bulk/app/Shared/Messaging/BulkMessaging.php`. The module creates durable work, retry, and dead-letter quorum queues for each declared queue.
 
 ```mermaid
 flowchart LR
@@ -85,20 +103,26 @@ Queue names and routing keys are code-declared; they are listed with `php artisa
 ## Technical Deep Dive
 
 ### The Chunking Pipeline
+
 To process multi-gigabyte files without triggering Out-of-Memory (OOM) errors, the system implements a streaming chunking strategy:
-1. **Streaming**: The `ParseBulkCsvHandler` uses a `BulkCsvStreamer` (PHP Generator) to read the source CSV row-by-row.
+
+1. **Streaming**: The parse handler uses `BulkCsvStreamer` (a PHP generator) to read the source CSV row-by-row.
 2. **Buffering**: Rows are buffered into chunks of 1,000 records.
 3. **Immutable Archiving**: Each chunk is written to a temporary file and then uploaded to **WORM storage** (`bulk-chunks/{uuid}/chunk-xxxx.csv`).
 4. **Work Distribution**: One `BulkValidate` message is published to RabbitMQ per chunk, allowing a pool of validation workers to process the file in parallel.
 
 ### WORM Storage Architecture
-The system uses **S3 Object Lock** (via MinIO) to ensure an immutable audit trail. 
+
+The system uses **S3 Object Lock** (via MinIO) to ensure an immutable audit trail.
+
 - **Scope**: Both intermediate chunks and final results are stored with WORM lock.
 - **Constraint**: Once written, artifacts cannot be modified or deleted for the configured retention period (default 365 days).
 - **Rationale**: This ensures that the exact data used for a specific consent action is preserved for compliance and auditing, preventing tampering after processing.
 
 ### Concurrency & Reliability
+
 To prevent multiple workers from processing the same chunk in a distributed environment, the system uses an **atomic claiming mechanism**:
+
 - **Conditional Update**: Before processing, a worker executes a single atomic database query:
   `UPDATE bulk_job_chunks SET status = 'processing', attempts = attempts + 1 WHERE id = ? AND status = 'pending'`
 - **Distributed Lock**: If the affected row count is not 1, the worker aborts, knowing another consumer has already claimed the chunk.
@@ -107,6 +131,7 @@ To prevent multiple workers from processing the same chunk in a distributed envi
 ## Data Model Specification
 
 ### BulkJob (The Job State)
+
 The root entity tracking the overall lifecycle.
 | Field | Description |
 | :--- | :--- |
@@ -117,6 +142,7 @@ The root entity tracking the overall lifecycle.
 | `result_path` | WORM path to the final result CSV. |
 
 ### BulkJobChunk (The Work Unit)
+
 Tracks a specific segment of the original CSV.
 | Field | Description |
 | :--- | :--- |
@@ -125,6 +151,7 @@ Tracks a specific segment of the original CSV.
 | `status` | `Pending` $\rightarrow$ `Processing` $\rightarrow$ `Completed`. |
 
 ### BulkJobRow (The Result Unit)
+
 The granular outcome for every single record.
 | Field | Description |
 | :--- | :--- |
@@ -178,16 +205,16 @@ The Composer dependencies include Laravel 13, Filament 5, `php-amqplib`, and the
 
 6. Open `http://127.0.0.1:8000/admin`, sign in, and select **Bulk jobs → Create**. The success notification displays the process ID, which is the job UUID.
 
-
 ## CSV upload format
 
 Upload a `.csv` file in Filament. The first CSV record is the header row.
 
 ### Input Format
+
 Required columns:
-| Column        | Rule                                                                                                                                |
+| Column | Rule |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `userid`      | Must be present and non-empty in each data row.                                                                                     |
+| `userid` | Must be present and non-empty in each data row. |
 | `phonenumber` | Must be present. Spaces, hyphens, and parentheses are removed; the remaining value must be an optional `+` followed by 8–15 digits. |
 
 **Example Input:**
@@ -198,7 +225,52 @@ Required columns:
 
 Headers are matched case-insensitively after removing spaces, hyphens, and underscores. Missing required or duplicate normalized headers fail parsing. A UTF-8 BOM in the first header is handled, and entirely empty data rows are skipped. Other columns, such as `email` or `account_type`, are preserved as `additional_data` and carried into chunk and result CSVs.
 
+### Add a validation rule for a CSV column
+
+Validation rules are auto-discovered from `Modules/Bulk/app/Processing/Validation/Rules`. Each rule class implements `CsvFieldRule`; no central rule list or validator edit is needed. The `field()` value is compared with the normalized CSV header (lowercase, with whitespace, hyphens, and underscores removed). `required()` controls whether the header must exist. `rules()` supplies Laravel validation rules, `normalize()` transforms the cell before validation, and `errorCode()` returns the row failure code.
+
+For example, to validate an optional `account_type` column, add `AccountTypeFieldRule.php` in that Rules directory:
+
+```php
+<?php
+
+namespace Modules\Bulk\Processing\Validation\Rules;
+
+use Modules\Bulk\Processing\Validation\CsvFieldRule;
+
+class AccountTypeFieldRule implements CsvFieldRule
+{
+  public function field(): string
+  {
+    return 'accounttype';
+  }
+
+  public function required(): bool
+  {
+    return false;
+  }
+
+  public function rules(): array
+  {
+    return ['sometimes', 'nullable', 'in:basic,premium'];
+  }
+
+  public function normalize(mixed $value): string
+  {
+    return strtolower(trim((string) $value));
+  }
+
+  public function errorCode(mixed $value): string
+  {
+    return 'invalid_account_type';
+  }
+}
+```
+
+The CSV column can then be included as `account_type`; its values are validated in the processing worker and remain in `additional_data` for the final result.
+
 ### Result Format
+
 The final result CSV produced by the `FinalizeBulkHandler` contains:
 | Column | Description |
 | :--- | :--- |
@@ -233,7 +305,7 @@ stateDiagram-v2
 
 | Status       | Meaning                                                                                                                  |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `queued`     | Job and source object created; parse message recorded in the transactional outbox.                                        |
+| `queued`     | Job and source object created; parse message recorded in the transactional outbox.                                       |
 | `parsing`    | Parse worker is reading the CSV and creating chunks.                                                                     |
 | `processing` | Validation chunks are being processed.                                                                                   |
 | `finalizing` | Result CSV is being generated and archived.                                                                              |

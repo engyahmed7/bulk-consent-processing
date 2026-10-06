@@ -2,25 +2,25 @@
 
 namespace Tests\Feature;
 
-use App\Domains\Bulk\Enums\BulkChunkStatus;
-use App\Domains\Bulk\Enums\BulkJobStatus;
-use App\Domains\Bulk\Enums\BulkRowStatus;
-use App\Domains\Bulk\Enums\ConsentAction;
-use App\Domains\Bulk\Handlers\FinalizeBulkHandler;
-use App\Domains\Bulk\Handlers\ParseBulkCsvHandler;
-use App\Domains\Bulk\Handlers\ProcessBulkChunkHandler;
-use App\Domains\Bulk\Messaging\BulkMessaging;
-use App\Domains\Bulk\Models\BulkJob;
-use App\Domains\Bulk\Models\BulkJobChunk;
-use App\Domains\Bulk\Models\BulkJobRow;
-use App\Domains\Bulk\Services\BulkUploadService;
-use App\Domains\Bulk\Services\Consent\ConsentClientInterface;
-use App\Domains\Bulk\Services\Consent\ConsentResult;
-use App\Domains\Bulk\Services\Storage\WormArchive;
-use App\Domains\Bulk\Services\Storage\WormStorage;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
+use Modules\Bulk\Finalization\FinalizeBulkHandler;
+use Modules\Bulk\Operations\BulkUploadService;
+use Modules\Bulk\Parsing\ParseBulkCsvHandler;
+use Modules\Bulk\Processing\Consent\ConsentClientInterface;
+use Modules\Bulk\Processing\Consent\ConsentResult;
+use Modules\Bulk\Processing\ProcessBulkChunkHandler;
+use Modules\Bulk\Shared\Enums\BulkChunkStatus;
+use Modules\Bulk\Shared\Enums\BulkJobStatus;
+use Modules\Bulk\Shared\Enums\BulkRowStatus;
+use Modules\Bulk\Shared\Enums\ConsentAction;
+use Modules\Bulk\Shared\Messaging\BulkMessaging;
+use Modules\Bulk\Shared\Models\BulkJob;
+use Modules\Bulk\Shared\Models\BulkJobChunk;
+use Modules\Bulk\Shared\Models\BulkJobRow;
+use Modules\Bulk\Shared\Storage\WormArchive;
+use Modules\Bulk\Shared\Storage\WormStorage;
 use Modules\Core\Features\RabbitMQ\Contracts\MessagePublisher;
 use Modules\Core\Features\RabbitMQ\Messages\Envelope;
 use Modules\Core\Features\RabbitMQ\Models\OutboxMessage;
@@ -40,7 +40,6 @@ class BulkOperationsTest extends TestCase
 
         Storage::fake('minio');
         Storage::disk('minio')->makeDirectory('inputs');
-
     }
 
     public function test_bulk_queues_are_registered_with_the_rabbitmq_module(): void
@@ -247,6 +246,46 @@ class BulkOperationsTest extends TestCase
             'exchange' => BulkMessaging::EVENTS_EXCHANGE,
             'routing_key' => BulkMessaging::FINALIZE_REQUESTED,
         ]);
+    }
+
+    public function test_chunk_handler_applies_discovered_validation_to_additional_csv_columns(): void
+    {
+        $consent = $this->mock(ConsentClientInterface::class);
+        $consent->shouldReceive('updateConsent')->never();
+
+        $job = BulkJob::query()->create([
+            'action' => ConsentAction::OptIn,
+            'status' => BulkJobStatus::Processing,
+            'original_filename' => 'fixture.csv',
+            'input_path' => 'inputs/x.csv',
+            'total_rows' => 1,
+            'chunks_total' => 1,
+        ]);
+
+        $chunk = BulkJobChunk::query()->create([
+            'bulk_job_id' => $job->id,
+            'chunk_index' => 0,
+            'status' => BulkChunkStatus::Pending,
+            'row_from' => 2,
+            'row_to' => 2,
+        ]);
+
+        BulkJobRow::query()->create([
+            'bulk_job_id' => $job->id,
+            'chunk_id' => $chunk->id,
+            'row_number' => 2,
+            'user_id' => 'u1',
+            'phone_number' => '966500000001',
+            'additional_data' => ['email' => 'not-an-email'],
+            'status' => BulkRowStatus::Pending,
+        ]);
+
+        app(ProcessBulkChunkHandler::class)->handle($this->envelope(['chunk_id' => $chunk->id]));
+
+        $row = BulkJobRow::query()->firstOrFail();
+        $this->assertSame(BulkRowStatus::Failed, $row->status);
+        $this->assertSame('invalid_email', $row->error_code);
+        $this->assertSame('not-an-email', $row->additional_data['email']);
     }
 
     public function test_chunk_handler_does_not_claim_a_chunk_already_processing(): void

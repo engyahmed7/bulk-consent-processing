@@ -2,16 +2,16 @@
 
 namespace Tests\Feature;
 
-use App\Domains\Bulk\Enums\BulkJobStatus;
-use App\Domains\Bulk\Enums\ConsentAction;
-use App\Domains\Bulk\Messaging\BulkMessaging;
-use App\Domains\Bulk\Models\BulkJob;
 use App\Filament\Resources\BulkJobs\Pages\CreateBulkJob;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
+use Modules\Bulk\Shared\Enums\BulkJobStatus;
+use Modules\Bulk\Shared\Enums\ConsentAction;
+use Modules\Bulk\Shared\Messaging\BulkMessaging;
+use Modules\Bulk\Shared\Models\BulkJob;
 use Tests\TestCase;
 
 class CreateBulkJobTest extends TestCase

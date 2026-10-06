@@ -1,12 +1,11 @@
 <?php
 
-use App\Providers\AppServiceProvider;
 use App\Providers\Filament\AdminPanelProvider;
+use Modules\Bulk\Providers\BulkServiceProvider;
 use Modules\Core\Kernel\CoreServiceProvider;
 
 return [
     CoreServiceProvider::class,
-    AppServiceProvider::class,
+    BulkServiceProvider::class,
     AdminPanelProvider::class,
-    App\Providers\ValidationServiceProvider::class,
 ];
